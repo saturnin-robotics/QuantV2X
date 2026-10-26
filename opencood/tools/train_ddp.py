@@ -1,4 +1,6 @@
 import argparse
+import contextlib
+import io
 import os
 import statistics
 import glob
@@ -29,6 +31,39 @@ def train_parser():
                         help='url used to set up distributed training')
     opt = parser.parse_args()
     return opt
+
+
+def accumulate_losses(sums, counts, loss_dict, suffix=""):
+    """Add the scalar entries of a loss dict to the epoch sums."""
+    for k, v in loss_dict.items():
+        if torch.is_tensor(v):
+            if v.numel() != 1:
+                continue
+            v = v.item()
+        if isinstance(v, (int, float)):
+            sums[k + suffix] = sums.get(k + suffix, 0.0) + float(v)
+            counts[k + suffix] = counts.get(k + suffix, 0) + 1
+
+
+def print_epoch_losses(epoch, sums, counts, distributed):
+    """One line per epoch: mean of each loss term over every iteration and
+    every rank (replaces the per-iteration print of criterion.logging).
+    Dicts are gathered as objects, so ranks may hold different terms."""
+    gathered = [(sums, counts)]
+    if distributed:
+        gathered = [None] * torch.distributed.get_world_size()
+        torch.distributed.all_gather_object(gathered, (sums, counts))
+    total, n = {}, {}
+    for s_r, c_r in gathered:
+        for k in s_r:
+            total[k] = total.get(k, 0.0) + s_r[k]
+            n[k] = n.get(k, 0) + c_r[k]
+    if not total:
+        return
+    keys = sorted(total)
+    print('[epoch %d] train mean over %d it || ' % (epoch, max(n.values()))
+          + ' || '.join('%s: %.4f' % (k, total[k] / n[k]) for k in keys),
+          flush=True)
 
 
 def main():
@@ -148,6 +183,7 @@ def main():
             model_without_ddp.model_train_init()
         except:
             print("No model_train_init function")
+        loss_sums, loss_counts = {}, {}
         for i, batch_data in enumerate(train_loader):
             if batch_data is None or batch_data['ego']['object_bbx_mask'].sum()==0:
                 continue
@@ -164,7 +200,10 @@ def main():
                     ouput_dict = model(batch_data['ego'])
                     final_loss = criterion(ouput_dict, batch_data['ego']['label_dict'])
 
-            criterion.logging(epoch, i, len(train_loader), writer)
+            # tensorboard every iteration, loss printed once per epoch
+            with contextlib.redirect_stdout(io.StringIO()):
+                criterion.logging(epoch, i, len(train_loader), writer)
+            accumulate_losses(loss_sums, loss_counts, criterion.loss_dict)
 
             if supervise_single_flag:
                 if not opt.half:
@@ -172,7 +211,9 @@ def main():
                 else:
                     with torch.cuda.amp.autocast():
                         final_loss += criterion(ouput_dict, batch_data['ego']['label_dict_single'], suffix="_single") * hypes['train_params'].get("single_weight", 1)
-                criterion.logging(epoch, i, len(train_loader), writer, suffix="_single")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    criterion.logging(epoch, i, len(train_loader), writer, suffix="_single")
+                accumulate_losses(loss_sums, loss_counts, criterion.loss_dict, "_single")
 
             if not opt.half:
                 final_loss.backward()
@@ -184,6 +225,8 @@ def main():
 
 
         # torch.cuda.empty_cache() # it will destroy memory buffer
+        print_epoch_losses(epoch, loss_sums, loss_counts, opt.distributed)
+
         # CoopFGNN patch: only rank 0 writes checkpoints (all ranks wrote the
         # same file concurrently), optimizer state kept for resumption
         if epoch % hypes['train_params']['save_freq'] == 0 and opt.rank == 0:
