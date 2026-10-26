@@ -417,7 +417,7 @@ def getLateFusionDataset(cls):
                 transformation_matrix = cav_content['transformation_matrix']
                 if self.visualize:
                     origin_lidar = [cav_content['origin_lidar']]
-                    if (self.params['only_vis_ego'] is False) or (cav_id=='ego'):
+                    if (self.params.get('only_vis_ego', True) is False) or (cav_id=='ego'):
                         projected_lidar = copy.deepcopy(cav_content['origin_lidar'])
                         projected_lidar[:, :3] = \
                             box_utils.project_points_by_matrix_torch(
