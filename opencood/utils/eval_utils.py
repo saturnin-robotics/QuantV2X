@@ -96,6 +96,9 @@ def caluclate_tp_fp(det_boxes, det_score, gt_boxes, result_stat, iou_thresh,
         det_score_new = np.array(det_score_new)
         # sort the prediction bounding box by score
         score_order_descend = np.argsort(-det_score_new)
+        # CoopFGNN patch: keep scores aligned with the tp / fp lists, which
+        # are appended in descending score order (as in HEAL)
+        det_score_new = det_score_new[score_order_descend]
 
         # match prediction and gt bounding box
         for i in range(score_order_descend.shape[0]):
