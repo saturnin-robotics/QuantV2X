@@ -39,6 +39,10 @@ def getLateFusionDataset(cls):
     class LateFusionDataset(cls):
         def __init__(self, params, visualize, train=True):
             super().__init__(params, visualize, train)
+            # The OPV2V base dataset no longer builds its index in
+            # __init__ (QuantV2X moved it to the heter datasets)
+            if not hasattr(self, 'len_record'):
+                self.reinitialize()
             self.anchor_box = self.post_processor.generate_anchor_box()
             self.anchor_box_torch = torch.from_numpy(self.anchor_box)
 
