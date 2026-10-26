@@ -78,9 +78,12 @@ class OPV2VBaseDataset(Dataset):
                                    os.path.isdir(os.path.join(root_dir, x))])
         
         self.scenario_folders = scenario_folders
-        self.modality_assignment = None if ('assignment_path' not in params['heter'] or params['heter']['assignment_path'] is None) \
-                                            else read_json(params['heter']['assignment_path'])
-        self.cav_m_id = [id for id in params['heter']['mapping_dict'].keys() if params['heter']['mapping_dict'][id] != 'none'] # m_id in assignment, not actual modality
+        # Non-heterogeneous configs (no 'heter' section, as in OpenCOOD and
+        # HEAL) have no modality assignment and no cav filtering
+        heter = params.get('heter', {})
+        self.modality_assignment = None if ('assignment_path' not in heter or heter['assignment_path'] is None) \
+                                            else read_json(heter['assignment_path'])
+        self.cav_m_id = [id for id in heter.get('mapping_dict', {}).keys() if heter['mapping_dict'][id] != 'none'] # m_id in assignment, not actual modality
         # self.reinitialize()
 
 
@@ -107,30 +110,36 @@ class OPV2VBaseDataset(Dataset):
                 self.modality_assignment[scenario_name] = \
                     {cav_id: ego_m for cav_id in cav_list}
 
+            # Without an assignment file every cav is kept, as in HEAL
+            if self.modality_assignment is None:
+                filtered_mod_dict = {}
+                assignment = None
             # If modality assignment exists, map cav IDs to their modality
-            if self.modality_assignment and scenario_name in self.modality_assignment:
+            elif self.modality_assignment and scenario_name in self.modality_assignment:
                 assignment = self.modality_assignment[scenario_name]
                 m_id_in_scene = [assignment[cav_id] for cav_id in cav_list]
             else:
+                assignment = {}
                 m_id_in_scene = [None] * len(cav_list) # No assignment found
             
             # Drop the scenario only when no cav carries a used modality.
             # Requiring every modality of mapping_dict dropped all scenarios
             # with fewer agents than modalities (HEAL keeps them).
-            if not any(m in self.cav_m_id for m in m_id_in_scene):
+            if assignment is not None and \
+                    not any(m in self.cav_m_id for m in m_id_in_scene):
                 print(f"Scenario {scenario_name} does not contain all required modalities. Skipping.")
                 continue
 
-            filtered_cav_list = []
-            filtered_mod_dict = {}
-            for cav_id in cav_list:
-                modality = assignment.get(cav_id, None)
-                if modality in self.cav_m_id: 
-                    filtered_cav_list.append(cav_id)
-                    filtered_mod_dict[cav_id] = modality
-            print(f"Filtered cav_list for scenario {scenario_name}: {filtered_mod_dict}")
-
-            cav_list = filtered_cav_list
+            if assignment is not None:
+                filtered_cav_list = []
+                filtered_mod_dict = {}
+                for cav_id in cav_list:
+                    modality = assignment.get(cav_id, None)
+                    if modality in self.cav_m_id: 
+                        filtered_cav_list.append(cav_id)
+                        filtered_mod_dict[cav_id] = modality
+                print(f"Filtered cav_list for scenario {scenario_name}: {filtered_mod_dict}")
+                cav_list = filtered_cav_list
 
             self.scenario_database.update({i: OrderedDict()})
 
