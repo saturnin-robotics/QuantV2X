@@ -37,6 +37,10 @@ def getIntermediate2stageFusionDataset(cls):
     class Intermediate2stageFusionDataset(cls):
         def __init__(self, params, visualize, train=True):
             super().__init__(params, visualize, train)
+            # The OPV2V base dataset no longer builds its index in
+            # __init__ (QuantV2X moved it to the heter datasets)
+            if not hasattr(self, 'len_record'):
+                self.reinitialize()
             # intermediate and supervise single
             self.supervise_single = True if ('supervise_single' in params['model']['args'] and params['model']['args']['supervise_single']) \
                                         else False
