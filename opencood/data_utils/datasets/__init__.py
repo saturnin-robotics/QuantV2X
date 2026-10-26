@@ -1,3 +1,4 @@
+import inspect
 from opencood.data_utils.datasets.late_fusion_dataset import getLateFusionDataset
 from opencood.data_utils.datasets.late_heter_fusion_dataset import getLateheterFusionDataset
 from opencood.data_utils.datasets.late_heter_fusion_3class_dataset import getLateheter3classFusionDataset
@@ -41,11 +42,12 @@ def build_dataset(dataset_cfg, visualize=False, train=True, calibrate=False):
     base_dataset_cls = dataset_name.upper() + "BaseDataset"
     base_dataset_cls = eval(base_dataset_cls)
 
-    dataset = fusion_dataset_func(base_dataset_cls)(
-        params=dataset_cfg,
-        visualize=visualize,
-        train=train,
-        calibrate=calibrate
-    )
+    dataset_cls = fusion_dataset_func(base_dataset_cls)
+    kwargs = dict(params=dataset_cfg, visualize=visualize, train=train)
+    # The HEAL / OpenCOOD datasets (late, early, intermediate, ...) do not
+    # take the calibrate argument added for the quantized heter datasets
+    if 'calibrate' in inspect.signature(dataset_cls.__init__).parameters:
+        kwargs['calibrate'] = calibrate
+    dataset = dataset_cls(**kwargs)
 
     return dataset
