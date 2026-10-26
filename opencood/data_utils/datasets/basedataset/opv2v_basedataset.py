@@ -138,7 +138,9 @@ class OPV2VBaseDataset(Dataset):
                     if modality in self.cav_m_id: 
                         filtered_cav_list.append(cav_id)
                         filtered_mod_dict[cav_id] = modality
-                print(f"Filtered cav_list for scenario {scenario_name}: {filtered_mod_dict}")
+                # printed at the first build only (reinitialize runs every epoch)
+                if not getattr(self, "_filter_printed", False):
+                    print(f"Filtered cav_list for scenario {scenario_name}: {filtered_mod_dict}")
                 cav_list = filtered_cav_list
 
             self.scenario_database.update({i: OrderedDict()})
@@ -247,6 +249,7 @@ class OPV2VBaseDataset(Dataset):
                     self.scenario_database[i][cav_id]['ego'] = False
             i += 1
         print("len:", self.len_record[-1])
+        self._filter_printed = True
 
     def retrieve_base_data(self, idx):
         """
