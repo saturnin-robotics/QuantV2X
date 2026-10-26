@@ -45,7 +45,7 @@ def accumulate_losses(sums, counts, loss_dict, suffix=""):
             counts[k + suffix] = counts.get(k + suffix, 0) + 1
 
 
-def print_epoch_losses(epoch, sums, counts, distributed):
+def print_epoch_losses(epoch, total_epochs, sums, counts, distributed):
     """One line per epoch: mean of each loss term over every iteration and
     every rank (replaces the per-iteration print of criterion.logging).
     Dicts are gathered as objects, so ranks may hold different terms."""
@@ -61,7 +61,8 @@ def print_epoch_losses(epoch, sums, counts, distributed):
     if not total:
         return
     keys = sorted(total)
-    print('[epoch %d] train mean over %d it || ' % (epoch, max(n.values()))
+    # epochs printed from 1, as the net_epoch<N>.pth checkpoints are named
+    print('[epoch %d/%d] train mean over %d it || ' % (epoch + 1, total_epochs, max(n.values()))
           + ' || '.join('%s: %.4f' % (k, total[k] / n[k]) for k in keys),
           flush=True)
 
@@ -225,7 +226,7 @@ def main():
 
 
         # torch.cuda.empty_cache() # it will destroy memory buffer
-        print_epoch_losses(epoch, loss_sums, loss_counts, opt.distributed)
+        print_epoch_losses(epoch, epoches, loss_sums, loss_counts, opt.distributed)
 
         # CoopFGNN patch: only rank 0 writes checkpoints (all ranks wrote the
         # same file concurrently), optimizer state kept for resumption
@@ -256,7 +257,7 @@ def main():
                     valid_ave_loss.append(final_loss.item())
 
             valid_ave_loss = statistics.mean(valid_ave_loss)
-            print('At epoch %d, the validation loss is %f' % (epoch,
+            print('[epoch %d/%d] validation loss %f' % (epoch + 1, epoches,
                                                               valid_ave_loss))
             writer.add_scalar('Validate_Loss', valid_ave_loss, epoch)
 
