@@ -124,7 +124,7 @@ def caluclate_tp_fp(det_boxes, det_score, gt_boxes, result_stat, iou_thresh,
 
 
 
-def calculate_ap(result_stat, iou):
+def calculate_ap(result_stat, iou, global_sort=True):
     """
     Calculate the average precision and recall, and save them into a txt.
     Parameters
@@ -140,9 +140,15 @@ def calculate_ap(result_stat, iou):
     score = np.array(iou_5['score'])
     assert len(fp) == len(tp) and len(tp) == len(score)
 
-    sorted_index = np.argsort(-score)
-    fp = fp[sorted_index].tolist()
-    tp = tp[sorted_index].tolist()
+    # global_sort=False keeps the detections in frame order (each frame sorted
+    # by score), the AP of the OPV2V paper and of the OpenCOOD benchmark table
+    if global_sort:
+        sorted_index = np.argsort(-score)
+        fp = fp[sorted_index].tolist()
+        tp = tp[sorted_index].tolist()
+    else:
+        fp = fp.tolist()
+        tp = tp.tolist()
 
     gt_total = iou_5['gt']
 
@@ -184,6 +190,13 @@ def eval_final_results(result_stat, save_path, infer_info=None):
                       'mpre_70': mpre_70,
                       'mrec_70': mrec_70,
                       })
+    # AP without the global sort, comparable with the OPV2V paper numbers
+    ap_30_ng = calculate_ap(result_stat, 0.30, global_sort=False)[0]
+    ap_50_ng = calculate_ap(result_stat, 0.50, global_sort=False)[0]
+    ap_70_ng = calculate_ap(result_stat, 0.70, global_sort=False)[0]
+    dump_dict.update({'ap30_noglobalsort': ap_30_ng,
+                      'ap_50_noglobalsort': ap_50_ng,
+                      'ap_70_noglobalsort': ap_70_ng})
     if infer_info is None:
         yaml_utils.save_yaml(dump_dict, os.path.join(save_path, 'eval.yaml'))
     else:
@@ -193,5 +206,7 @@ def eval_final_results(result_stat, save_path, infer_info=None):
           'The Average Precision at IOU 0.3 is %.4f, '
           'The Average Precision at IOU 0.5 is %.4f, '
           'The Average Precision at IOU 0.7 is %.4f' % (ap_30, ap_50, ap_70))
+    print(infer_info, '(no global sort, OPV2V paper protocol)',
+          'AP@0.3 %.4f, AP@0.5 %.4f, AP@0.7 %.4f' % (ap_30_ng, ap_50_ng, ap_70_ng))
 
     return ap_30, ap_50, ap_70
