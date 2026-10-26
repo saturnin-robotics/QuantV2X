@@ -98,6 +98,15 @@ class OPV2VBaseDataset(Dataset):
                             if os.path.isdir(
                         os.path.join(scenario_folder, x))]
             
+            # Scenarios absent from the assignment file (e.g. the Culver City
+            # test set) get the ego modality for every cav, instead of being
+            # dropped or failing in reassign_cav_modality
+            if self.modality_assignment is not None and \
+                    scenario_name not in self.modality_assignment:
+                ego_m = self.params['heter']['ego_modality']
+                self.modality_assignment[scenario_name] = \
+                    {cav_id: ego_m for cav_id in cav_list}
+
             # If modality assignment exists, map cav IDs to their modality
             if self.modality_assignment and scenario_name in self.modality_assignment:
                 assignment = self.modality_assignment[scenario_name]
@@ -105,8 +114,10 @@ class OPV2VBaseDataset(Dataset):
             else:
                 m_id_in_scene = [None] * len(cav_list) # No assignment found
             
-            # Check if all required modalities (cav_m_id) are present in the scenario
-            if not all(m in m_id_in_scene for m in self.cav_m_id):
+            # Drop the scenario only when no cav carries a used modality.
+            # Requiring every modality of mapping_dict dropped all scenarios
+            # with fewer agents than modalities (HEAL keeps them).
+            if not any(m in self.cav_m_id for m in m_id_in_scene):
                 print(f"Scenario {scenario_name} does not contain all required modalities. Skipping.")
                 continue
 
