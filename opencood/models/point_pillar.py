@@ -61,7 +61,10 @@ class PointPillar(nn.Module):
 
         batch_dict = self.pillar_vfe(batch_dict)
         batch_dict = self.scatter(batch_dict)
-        batch_dict = self.backbone(batch_dict)
+        # The BEV backbones take and return the feature tensor in this
+        # codebase (QuantV2X changed BaseBEVBackbone.forward)
+        batch_dict['spatial_features_2d'] = \
+            self.backbone(batch_dict['spatial_features'])
 
         spatial_features_2d = batch_dict['spatial_features_2d']
 
