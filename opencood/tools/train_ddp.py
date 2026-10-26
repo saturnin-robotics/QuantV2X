@@ -115,6 +115,14 @@ def main():
     # optimizer setup
     optimizer = train_utils.setup_optimizer(hypes, model_without_ddp)
     
+    # CoopFGNN patch: restore the optimizer state saved with the last epoch
+    opt_state_path = os.path.join(saved_path, 'optimizer_last.pth')
+    if opt.model_dir and os.path.exists(opt_state_path):
+        opt_state = torch.load(opt_state_path, map_location='cpu')
+        if opt_state['epoch'] == init_epoch:
+            optimizer.load_state_dict(opt_state['optimizer'])
+            print('restored optimizer state of epoch %d' % init_epoch)
+
     scheduler = train_utils.setup_lr_schedular(hypes, optimizer, init_epoch=init_epoch)
 
     # record training
@@ -176,10 +184,14 @@ def main():
 
 
         # torch.cuda.empty_cache() # it will destroy memory buffer
-        if epoch % hypes['train_params']['save_freq'] == 0:
+        # CoopFGNN patch: only rank 0 writes checkpoints (all ranks wrote the
+        # same file concurrently), optimizer state kept for resumption
+        if epoch % hypes['train_params']['save_freq'] == 0 and opt.rank == 0:
             torch.save(model_without_ddp.state_dict(),
                        os.path.join(saved_path,
                                     'net_epoch%d.pth' % (epoch + 1)))
+            torch.save({'epoch': epoch + 1, 'optimizer': optimizer.state_dict()},
+                       opt_state_path)
             
         if epoch % hypes['train_params']['eval_freq'] == 0:
             valid_ave_loss = []
@@ -206,7 +218,9 @@ def main():
             writer.add_scalar('Validate_Loss', valid_ave_loss, epoch)
 
             # lowest val loss
-            if valid_ave_loss < lowest_val_loss:
+            # CoopFGNN patch: rank 0 alone decides and writes the best-val
+            # checkpoint (each rank only sees its shard of the val set)
+            if valid_ave_loss < lowest_val_loss and opt.rank == 0:
                 lowest_val_loss = valid_ave_loss
                 torch.save(model_without_ddp.state_dict(),
                        os.path.join(saved_path,
@@ -223,6 +237,9 @@ def main():
         opencood_train_dataset.reinitialize()
 
     print('Training Finished, checkpoints saved to %s' % saved_path)
+    # CoopFGNN patch: marker read by the auto-resubmit slurm script
+    if opt.rank == 0:
+        open(os.path.join(saved_path, 'TRAINING_DONE'), 'w').close()
 
     if opt.rank == 0:
         run_test = True
