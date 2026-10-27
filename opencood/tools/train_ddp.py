@@ -1,6 +1,7 @@
 import argparse
 import contextlib
 import io
+import json
 import os
 import statistics
 import glob
@@ -124,6 +125,15 @@ def main():
         saved_path = opt.model_dir
         init_epoch, model = train_utils.load_saved_model(saved_path, model)
         lowest_val_epoch = init_epoch
+        # CoopFGNN patch: best validation loss of the whole run, kept across
+        # resubmitted jobs (it restarted at 1e5 and each job left its own
+        # best-val checkpoint behind)
+        best_val_path = os.path.join(saved_path, 'best_val.json')
+        if os.path.exists(best_val_path):
+            with open(best_val_path) as f:
+                best_val = json.load(f)
+            lowest_val_loss = best_val['loss']
+            lowest_val_epoch = best_val['epoch']
     else:
         init_epoch = 0
         # if we train the model from scratch, we need to create a folder
@@ -275,6 +285,8 @@ def main():
                         os.remove(os.path.join(saved_path,
                                         'net_epoch_bestval_at%d.pth' % (lowest_val_epoch)))
                 lowest_val_epoch = epoch + 1
+                with open(os.path.join(saved_path, 'best_val.json'), 'w') as f:
+                    json.dump({'loss': lowest_val_loss, 'epoch': lowest_val_epoch}, f)
 
         scheduler.step(epoch)
         

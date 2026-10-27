@@ -199,18 +199,19 @@ def load_saved_model(saved_path, model):
         return initial_epoch_
 
     file_list = glob.glob(os.path.join(saved_path, 'net_epoch_bestval_at*.pth'))
-    # CoopFGNN patch: resume from the latest epoch checkpoint when it is more
-    # recent than the best-validation one (otherwise a resubmitted job
-    # restarts from an older epoch and redoes finished epochs)
+    # CoopFGNN patch: resume from the latest net_epoch<N>.pth whenever one
+    # exists (a resubmitted job must not restart from an older epoch); the
+    # best-val checkpoint is used only when no epoch checkpoint exists, the
+    # most recent one if several were left behind
     last_epochs = [int(m.group(1)) for m in
                    (re.match(r"net_epoch(\d+)\.pth$", os.path.basename(f))
                     for f in glob.glob(os.path.join(saved_path, 'net_epoch*.pth')))
                    if m]
-    if file_list and last_epochs and max(last_epochs) > max(
-            int(re.search(r"bestval_at(\d+)\.pth$", f).group(1)) for f in file_list):
+    if last_epochs:
         file_list = []
     if file_list:
-        assert len(file_list) == 1
+        file_list = [max(file_list, key=lambda f: int(
+            re.search(r"bestval_at(\d+)\.pth$", f).group(1)))]
         print("resuming best validation model at epoch %d" % \
                 eval(file_list[0].split("/")[-1].rstrip(".pth").lstrip("net_epoch_bestval_at")))
         loaded_state_dict = torch.load(file_list[0] , map_location='cpu')
