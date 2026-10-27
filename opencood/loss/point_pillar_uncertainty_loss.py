@@ -8,7 +8,13 @@ import torch.nn.functional as F
 import numpy as np
 from opencood.loss.point_pillar_loss import PointPillarLoss, \
     one_hot_f, softmax_cross_entropy_with_logits, weighted_smooth_l1_loss, sigmoid_focal_loss
-import d3d.mathh as mathh
+from types import SimpleNamespace
+# ============================================================
+# CoAlign imports i0e_cuda from the d3d package; only that function is
+# used (von Mises angle loss). torch.special.i0e is the same exponentially
+# scaled Bessel function, with its gradient (i1e - i0e), on CPU and CUDA.
+# ============================================================
+mathh = SimpleNamespace(i0e_cuda=torch.special.i0e)
 from opencood.utils.common_utils import limit_period
 from opencood.data_utils.post_processor.voxel_postprocessor import VoxelPostprocessor
 from functools import partial
