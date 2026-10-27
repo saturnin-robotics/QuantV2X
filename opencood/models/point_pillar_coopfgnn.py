@@ -17,6 +17,9 @@
 #     transform the dataset uses), reduced to SE(2)
 # ============================================================
 
+import json
+import os
+
 import torch
 import torch.nn as nn
 
@@ -63,6 +66,18 @@ class PointPillarCoopFGNN(nn.Module):
         if 'miscalib' in coop:
             coop['miscalib'] = tuple(coop['miscalib'])
         self.fusion_net = CoopFGNNFuse(channels, grid, **coop)
+
+        # ============================================================
+        # Inference settings of the fusion (link gate tau_q, selection
+        # threshold / top-k, pose noise): 'coopfgnn_eval' in the config,
+        # overridden by the COOPFGNN_EVAL environment variable (JSON), so
+        # that the evaluation job can sweep them without new configs.
+        # ============================================================
+        eval_args = dict(args.get('coopfgnn_eval', {}))
+        eval_args.update(json.loads(os.environ.get('COOPFGNN_EVAL', '{}')))
+        if 'noise' in eval_args:
+            eval_args['noise'] = tuple(eval_args['noise'])
+        self.fusion_net.set_eval(**eval_args)
 
     @staticmethod
     def agent_poses(lidar_pose):
