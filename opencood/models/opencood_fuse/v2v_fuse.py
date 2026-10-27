@@ -130,10 +130,17 @@ class V2VNetFusion(nn.Module):
                         [batch_node_features[b][i, ...], agg_feature], dim=0)
                     # (C,H,W)
                     if self.gru_flag:
-                        gru_out = \
-                            self.conv_gru(cat_feature.unsqueeze(0).unsqueeze(0))[
-                                0][
-                                0].squeeze(0).squeeze(0)
+                        # ============================================================
+                        # Change from OpenCOOD: the GRU state is the node
+                        # feature, updated with [node, messages] as input, as
+                        # in the V2VNet paper. OpenCOOD starts each update
+                        # from a zero state, and the model then cannot fit
+                        # even 50 training frames (loss flat, AP@0.7 0.4).
+                        # ============================================================
+                        gru_out = self.conv_gru.cell_list[0](
+                            input_tensor=cat_feature.unsqueeze(0),
+                            h_cur=batch_node_features[b][i].unsqueeze(0)
+                        ).squeeze(0)
                     else:
                         gru_out = batch_node_features[b][i, ...] + agg_feature
                     updated_node_features.append(gru_out.unsqueeze(0))
