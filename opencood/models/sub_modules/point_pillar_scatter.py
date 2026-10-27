@@ -41,7 +41,16 @@ class PointPillarScatter(nn.Module):
         """
         pillar_features, coords = batch_dict['pillar_features'], batch_dict['voxel_coords']
         batch_spatial_features = []
-        batch_size = coords[:, 0].max().int().item() + 1
+        # ============================================================
+        # Number of maps from record_len when the model passes it: taken
+        # from the largest pillar index, an agent without any point in
+        # range at the end of the batch would get no map and shift the
+        # per-scene groups of the fusion.
+        # ============================================================
+        if 'record_len' in batch_dict:
+            batch_size = int(batch_dict['record_len'].sum())
+        else:
+            batch_size = coords[:, 0].max().int().item() + 1
 
         for batch_idx in range(batch_size):
             spatial_feature = torch.zeros(
