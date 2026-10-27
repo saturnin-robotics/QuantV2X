@@ -351,6 +351,28 @@ def getIntermediateFusionDataset(cls):
             
             # merge preprocessed features from different cavs into the same dict
             cav_num = len(cav_id_list)
+
+            # ============================================================
+            # Inputs of the OpenCOOD models (V2X-ViT prior encoding,
+            # V2X-ViT / CoBEVT spatial correction), synchronous setting as
+            # in the OpenCOOD OPV2V benchmark: no time delay, so the
+            # spatial correction is the identity. Velocity normalized by 30
+            # as in OpenCOOD; agents with a negative id are infrastructure.
+            # ============================================================
+            velocity, infra = [], []
+            for cav_id in cav_id_list:
+                params = base_data_dict[cav_id]['params']
+                velocity.append(float(params.get('ego_speed', 0.0)) / 30)
+                try:
+                    infra.append(1.0 if int(cav_id) < 0 else 0.0)
+                except ValueError:
+                    infra.append(0.0)
+            pad = self.max_cav - cav_num
+            prior_encoding = np.stack([velocity + pad * [0.0],
+                                       (cav_num + pad) * [0.0],
+                                       infra + pad * [0.0]], axis=-1)
+            spatial_correction_matrix = np.tile(np.eye(4),
+                                                (self.max_cav, 1, 1))
             
             
             for _i, cav_id in enumerate(cav_id_list):
@@ -442,6 +464,8 @@ def getIntermediateFusionDataset(cls):
                 'label_dict': label_dict,
                 'cav_num': cav_num,
                 'pairwise_t_matrix': pairwise_t_matrix,
+                'prior_encoding': prior_encoding,
+                'spatial_correction_matrix': spatial_correction_matrix,
                 'lidar_poses_clean': lidar_poses_clean,
                 'lidar_poses': lidar_poses})
 
@@ -477,6 +501,8 @@ def getIntermediateFusionDataset(cls):
 
             # pairwise transformation matrix
             pairwise_t_matrix_list = []
+            prior_encoding_list = []
+            spatial_correction_matrix_list = []
 
             # disconet
             teacher_processed_lidar_list = []
@@ -504,6 +530,9 @@ def getIntermediateFusionDataset(cls):
                 record_len.append(ego_dict['cav_num'])
                 label_dict_list.append(ego_dict['label_dict'])
                 pairwise_t_matrix_list.append(ego_dict['pairwise_t_matrix'])
+                prior_encoding_list.append(ego_dict['prior_encoding'])
+                spatial_correction_matrix_list.append(
+                    ego_dict['spatial_correction_matrix'])
 
                 if self.visualize:
                     origin_lidar.append(ego_dict['origin_lidar'])
@@ -547,6 +576,14 @@ def getIntermediateFusionDataset(cls):
 
             # (B, max_cav)
             pairwise_t_matrix = torch.from_numpy(np.array(pairwise_t_matrix_list))
+
+            # (B, max_cav, 3) and (B, max_cav, 4, 4), OpenCOOD models
+            output_dict['ego'].update({
+                'prior_encoding':
+                    torch.from_numpy(np.array(prior_encoding_list)).float(),
+                'spatial_correction_matrix':
+                    torch.from_numpy(
+                        np.array(spatial_correction_matrix_list)).float()})
 
             # add pairwise_t_matrix to label dict
             label_torch_dict['pairwise_t_matrix'] = pairwise_t_matrix
