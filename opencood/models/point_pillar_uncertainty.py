@@ -2,13 +2,15 @@
 # Author: Yifan Lu <yifan_lu@sjtu.edu.cn>
 # License: TDG-Attribution-NonCommercial-NoDistrib
 
+
 import torch
 import torch.nn as nn
 
 
 from opencood.models.sub_modules.pillar_vfe import PillarVFE
 from opencood.models.sub_modules.point_pillar_scatter import PointPillarScatter
-from opencood.models.sub_modules.base_bev_backbone import BaseBEVBackbone
+# OpenCOOD dict-API backbone, as in the CoAlign repository
+from opencood.models.opencood_fuse.base_bev_backbone import BaseBEVBackbone
 from opencood.utils.model_utils import weight_init
 
 class PointPillarUncertainty(nn.Module):
@@ -24,17 +26,17 @@ class PointPillarUncertainty(nn.Module):
         self.backbone = BaseBEVBackbone(args['base_bev_backbone'], 64)
         self.uncertainty_dim = args['uncertainty_dim'] # dim=3 means x, y, yaw, dim=2 means x, y
 
-        self.cls_head = nn.Conv2d(128 * 3, args['anchor_num'],
+        self.cls_head = nn.Conv2d(128 * 3, args['anchor_number'],
                                   kernel_size=1)
-        self.reg_head = nn.Conv2d(128 * 3, 7 * args['anchor_num'],
+        self.reg_head = nn.Conv2d(128 * 3, 7 * args['anchor_number'],
                                   kernel_size=1)
 
-        self.unc_head = nn.Conv2d(128 * 3, self.uncertainty_dim * args['anchor_num'],
+        self.unc_head = nn.Conv2d(128 * 3, self.uncertainty_dim * args['anchor_number'],
                                   kernel_size=1) 
 
         if 'dir_args' in args.keys():
             self.use_dir = True
-            self.dir_head = nn.Conv2d(128 * 3, args['dir_args']['num_bins'] * args['anchor_num'],
+            self.dir_head = nn.Conv2d(128 * 3, args['dir_args']['num_bins'] * args['anchor_number'],
                                   kernel_size=1) # BIN_NUM = 2
         else:
             self.use_dir = False
