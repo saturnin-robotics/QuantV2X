@@ -283,9 +283,9 @@ class VoxelPostprocessor(BasePostprocessor):
             # rename variable 
             if 'psm' in output_dict[cav_id]:
                 output_dict[cav_id]['cls_preds'] = output_dict[cav_id]['psm']
-            if 'rm' in output_dict:
+            if 'rm' in output_dict[cav_id]:
                 output_dict[cav_id]['reg_preds'] = output_dict[cav_id]['rm']
-            if 'dm' in output_dict:
+            if 'dm' in output_dict[cav_id]:
                 output_dict[cav_id]['dir_preds'] = output_dict[cav_id]['dm']
 
             # (H, W, anchor_num, 7)
