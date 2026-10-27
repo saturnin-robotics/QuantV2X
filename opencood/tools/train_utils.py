@@ -364,7 +364,7 @@ def setup_optimizer(hypes, model):
                                 lr=method_dict['lr'])
 
 
-def setup_lr_schedular(hypes, optimizer, init_epoch=None):
+def setup_lr_schedular(hypes, optimizer, init_epoch=None, n_iter_per_epoch=None):
     """
     Set up the learning rate schedular.
 
@@ -374,10 +374,34 @@ def setup_lr_schedular(hypes, optimizer, init_epoch=None):
         The training configurations.
 
     optimizer : torch.optimizer
+
+    n_iter_per_epoch : int
+        Iterations per epoch, needed by cosineannealwarm (stepped per
+        iteration with scheduler.step_update, as in OpenCOOD).
     """
     lr_schedule_config = hypes['lr_scheduler']
     last_epoch = init_epoch if init_epoch is not None else 0
-    
+
+    if lr_schedule_config['core_method'] == 'cosineannealwarm':
+        # ============================================================
+        # OpenCOOD cosine schedule with linear warmup (CoBEVT, Where2comm).
+        # Stateless in the iteration index: step_update(global_iter) gives
+        # the right learning rate after a resume.
+        # ============================================================
+        from timm.scheduler.cosine_lr import CosineLRScheduler
+        assert n_iter_per_epoch is not None
+        scheduler = CosineLRScheduler(
+            optimizer,
+            t_initial=lr_schedule_config['epoches'] * n_iter_per_epoch,
+            lr_min=lr_schedule_config['lr_min'],
+            warmup_lr_init=lr_schedule_config['warmup_lr'],
+            warmup_t=lr_schedule_config['warmup_epoches'] * n_iter_per_epoch,
+            cycle_limit=1,
+            t_in_epochs=False,
+        )
+        scheduler.step_update(last_epoch * n_iter_per_epoch)
+        return scheduler
+
 
     if lr_schedule_config['core_method'] == 'step':
         from torch.optim.lr_scheduler import StepLR
@@ -393,10 +417,15 @@ def setup_lr_schedular(hypes, optimizer, init_epoch=None):
                                 milestones=milestones,
                                 gamma=gamma)
 
-    else:
+    elif lr_schedule_config['core_method'] == 'exponential':
         from torch.optim.lr_scheduler import ExponentialLR
         gamma = lr_schedule_config['gamma']
         scheduler = ExponentialLR(optimizer, gamma)
+
+    else:
+        # Unknown names used to fall back silently to ExponentialLR
+        raise ValueError('unsupported lr scheduler %s'
+                         % lr_schedule_config['core_method'])
 
     for _ in range(last_epoch):
         scheduler.step()

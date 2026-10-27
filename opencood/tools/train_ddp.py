@@ -169,7 +169,10 @@ def main():
             optimizer.load_state_dict(opt_state['optimizer'])
             print('restored optimizer state of epoch %d' % init_epoch)
 
-    scheduler = train_utils.setup_lr_schedular(hypes, optimizer, init_epoch=init_epoch)
+    scheduler = train_utils.setup_lr_schedular(
+        hypes, optimizer, init_epoch=init_epoch,
+        n_iter_per_epoch=len(train_loader))
+    per_iter_lr = hypes['lr_scheduler']['core_method'] == 'cosineannealwarm'
 
     # record training
     writer = SummaryWriter(saved_path)
@@ -233,6 +236,8 @@ def main():
                 scaler.scale(final_loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
+            if per_iter_lr:
+                scheduler.step_update(epoch * len(train_loader) + i + 1)
 
 
         # torch.cuda.empty_cache() # it will destroy memory buffer
@@ -288,8 +293,9 @@ def main():
                 with open(os.path.join(saved_path, 'best_val.json'), 'w') as f:
                     json.dump({'loss': lowest_val_loss, 'epoch': lowest_val_epoch}, f)
 
-        scheduler.step(epoch)
-        
+        if not per_iter_lr:
+            scheduler.step(epoch)
+
         opencood_train_dataset.reinitialize()
 
     print('Training Finished, checkpoints saved to %s' % saved_path)
