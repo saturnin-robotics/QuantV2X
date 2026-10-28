@@ -358,18 +358,20 @@ def getIntermediateFusionDataset(cls):
             # in the OpenCOOD OPV2V benchmark: no time delay, so the
             # spatial correction is the identity. Velocity normalized by 30
             # as in OpenCOOD; agents with a negative id are infrastructure.
+            # time_delay is set by the temporal dataset (0 otherwise).
             # ============================================================
-            velocity, infra = [], []
+            velocity, delay, infra = [], [], []
             for cav_id in cav_id_list:
                 params = base_data_dict[cav_id]['params']
                 velocity.append(float(params.get('ego_speed', 0.0)) / 30)
+                delay.append(float(base_data_dict[cav_id].get('time_delay', 0.0)))
                 try:
                     infra.append(1.0 if int(cav_id) < 0 else 0.0)
                 except ValueError:
                     infra.append(0.0)
             pad = self.max_cav - cav_num
             prior_encoding = np.stack([velocity + pad * [0.0],
-                                       (cav_num + pad) * [0.0],
+                                       delay + pad * [0.0],
                                        infra + pad * [0.0]], axis=-1)
             spatial_correction_matrix = np.tile(np.eye(4),
                                                 (self.max_cav, 1, 1))
