@@ -129,8 +129,13 @@ def getIntermediateFusionDataset(cls):
                 selected_cav_processed.update({'processed_features': processed_lidar})
 
             # generate targets label single GT, note the reference pose is itself.
+            # CoopFGNN patch: with proj_first the cloud is in the ego frame,
+            # so the single-agent labels must be too (objects this agent
+            # annotates, expressed in the ego frame)
+            single_reference = ego_pose_clean if self.proj_first else \
+                selected_cav_base['params']['lidar_pose']
             object_bbx_center, object_bbx_mask, object_ids = self.generate_object_center(
-                [selected_cav_base], selected_cav_base['params']['lidar_pose']
+                [selected_cav_base], single_reference
             )
             label_dict = self.post_processor.generate_label(
                 gt_box_center=object_bbx_center, anchors=self.anchor_box, mask=object_bbx_mask
