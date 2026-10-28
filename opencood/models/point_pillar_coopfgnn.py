@@ -79,7 +79,7 @@ class PointPillarCoopFGNN(nn.Module):
         # that the evaluation job can sweep them without new configs.
         # ============================================================
         eval_args = dict(args.get('coopfgnn_eval', {}))
-        eval_args.update(json.loads(os.environ.get('COOPFGNN_EVAL', '{}')))
+        eval_args.update(json.loads(os.environ.get('COOPFGNN_EVAL') or '{}'))
         if 'noise' in eval_args:
             eval_args['noise'] = tuple(eval_args['noise'])
         self.fusion_net.set_eval(**eval_args)
