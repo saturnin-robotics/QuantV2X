@@ -257,11 +257,17 @@ class KLLoss(nn.Module):
             loss: [B, 1]
         """
         exp_minus_s = torch.exp(-s)
+        # ============================================================
+        # log I0(k) = log(i0e(k) * exp(k)) = log(i0e(k)) + k. The product
+        # form overflows to inf in float32 as soon as k = exp(-s) > ~88
+        # (NaN losses from the first epoch); the sum form does not.
+        # ============================================================
+        log_i0 = torch.log(mathh.i0e_cuda(exp_minus_s)) + exp_minus_s
         if limit_period:
             cos_abs = torch.abs(torch.cos(diff))
-            loss = loss = torch.log(mathh.i0e_cuda(exp_minus_s)*torch.exp(exp_minus_s)) - exp_minus_s * cos_abs.detach() + lambda_V * F.elu(s-s0)
+            loss = log_i0 - exp_minus_s * cos_abs.detach() + lambda_V * F.elu(s-s0)
         else:
-            loss = torch.log(mathh.i0e_cuda(exp_minus_s)*torch.exp(exp_minus_s)) - exp_minus_s * torch.cos(diff) + lambda_V * F.elu(s-s0)
+            loss = log_i0 - exp_minus_s * torch.cos(diff) + lambda_V * F.elu(s-s0)
 
         return loss
 
