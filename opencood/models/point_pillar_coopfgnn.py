@@ -40,6 +40,27 @@ from src.models.coop.visibility import BEVGrid
 from src.models.coop.visibility_torch import points_from_pillars
 
 
+class RefineBlock(nn.Module):
+    """
+    Bottleneck residual block (1x1 reduce, dilated 3x3, 1x1 expand). The
+    expand conv starts at zero, so the block starts as the identity.
+    """
+    def __init__(self, channels, hidden, dilation):
+        super(RefineBlock, self).__init__()
+        self.body = nn.Sequential(
+            nn.Conv2d(channels, hidden, 1, bias=False),
+            nn.BatchNorm2d(hidden, eps=1e-3, momentum=0.01), nn.ReLU(),
+            nn.Conv2d(hidden, hidden, 3, padding=dilation, dilation=dilation,
+                      bias=False),
+            nn.BatchNorm2d(hidden, eps=1e-3, momentum=0.01), nn.ReLU(),
+            nn.Conv2d(hidden, channels, 1))
+        nn.init.zeros_(self.body[-1].weight)
+        nn.init.zeros_(self.body[-1].bias)
+
+    def forward(self, x):
+        return x + self.body(x)
+
+
 class PointPillarCoopFGNN(nn.Module):
     def __init__(self, args):
         super(PointPillarCoopFGNN, self).__init__()
@@ -65,6 +86,17 @@ class PointPillarCoopFGNN(nn.Module):
             self.dir_head = nn.Conv2d(channels, bins * anchors, kernel_size=1)
             self.dir_head_single = nn.Conv2d(channels, bins * anchors,
                                              kernel_size=1)
+
+        # ============================================================
+        # refine: residual blocks on the fused ego map before the heads,
+        # for wider context after the windowed fusion (no extra message);
+        # the dilations give a receptive field of 1 + 2 * sum(dilations)
+        # cells
+        # ============================================================
+        refine = args.get('refine')
+        self.refine = nn.Sequential(*[
+            RefineBlock(channels, refine.get('hidden', channels // 2), d)
+            for d in refine['dilations']]) if refine else None
 
         coop = dict(args['coopfgnn'])
         self.aligned = coop.get('aligned', False)
@@ -235,6 +267,8 @@ class PointPillarCoopFGNN(nn.Module):
         if self.multiscale:
             belief = self.shrink_conv(
                 self.backbone.decode_multiscale_feature(belief))
+        if self.refine is not None:
+            belief = self.refine(belief)
 
         out = {'cls_preds': self.cls_head(belief),
                'reg_preds': self.reg_head(belief),
