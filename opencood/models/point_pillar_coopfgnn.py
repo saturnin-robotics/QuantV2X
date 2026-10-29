@@ -21,6 +21,7 @@
 # ============================================================
 
 import json
+import math
 import os
 
 import torch
@@ -111,6 +112,13 @@ class PointPillarCoopFGNN(nn.Module):
         if 'miscalib' in coop:
             coop['miscalib'] = tuple(coop['miscalib'])
         # ============================================================
+        # pose_correction: per-link correction of the relative pose
+        # (aligned mode), trained against the clean poses with
+        # pose_loss_weight; pose_noise is then the noise std the dataset
+        # applies to every agent (noise_setting, here in m and rad)
+        # ============================================================
+        self.pose_loss_weight = coop.pop('pose_loss_weight', 1.0)
+        # ============================================================
         # multiscale: fuse the three backbone scales (0.8 / 1.6 / 3.2 m with
         # stride 2 / 4 / 8), then decode them to the heads, as CoAlign;
         # otherwise fuse the decoded 0.8 m map only (v1)
@@ -141,6 +149,11 @@ class PointPillarCoopFGNN(nn.Module):
         self.late_min = eval_args.pop('late_min', 0.0)
         if self.late and not self.aligned:
             raise ValueError('late fusion needs aligned mode (proj_first)')
+        # The noise announced at inference defaults to the one the
+        # evaluation job injects (POSE_NOISE="pos_std,rot_std", m and deg)
+        if 'noise' not in eval_args and os.environ.get('POSE_NOISE'):
+            pos, rot = os.environ['POSE_NOISE'].split(',')
+            eval_args['noise'] = (float(pos), math.radians(float(rot)))
         if 'noise' in eval_args:
             eval_args['noise'] = tuple(eval_args['noise'])
         self.fusion_net.set_eval(**eval_args)
@@ -259,11 +272,15 @@ class PointPillarCoopFGNN(nn.Module):
             agent_type = self.per_agent(prior, record_len, 2).round().long()
         amb_prev, T_t_prev = self.previous_ambiguity(data_dict, record_len)
 
+        pose_clean = None
+        if self.fusion_net.corrector is not None and \
+                'lidar_pose_clean' in data_dict:
+            pose_clean = self.agent_poses(data_dict['lidar_pose_clean'])
         belief, stats = self.fusion_net(
             levels if self.multiscale else feats, conf, record_len,
             self.agent_poses(data_dict['lidar_pose']), points, cloud_idx,
             dt=dt, agent_type=agent_type, amb_prev=amb_prev,
-            T_t_prev=T_t_prev)
+            T_t_prev=T_t_prev, pose_clean=pose_clean)
         if self.multiscale:
             belief = self.shrink_conv(
                 self.backbone.decode_multiscale_feature(belief))
@@ -290,4 +307,6 @@ class PointPillarCoopFGNN(nn.Module):
 
         out.update({'comm_bits': stats['bits'],
                     'ego_alpha': stats['ego_alpha']})
+        if 'pose_loss' in stats and self.training:
+            out['pose_loss'] = self.pose_loss_weight * stats['pose_loss']
         return out

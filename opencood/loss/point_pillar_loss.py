@@ -115,6 +115,12 @@ class PointPillarLoss(nn.Module):
 
         total_loss += reg_loss + cls_loss
 
+        # Auxiliary loss computed by the model itself (CoopFGNN pose
+        # correction), already weighted, fused output only
+        if suffix == "" and 'pose_loss' in output_dict:
+            total_loss += output_dict['pose_loss']
+            self.loss_dict.update({'pose_loss': output_dict['pose_loss'].item()})
+
         self.loss_dict.update({'total_loss': total_loss.item(),
                                'reg_loss': reg_loss.item(),
                                'cls_loss': cls_loss.item()})
