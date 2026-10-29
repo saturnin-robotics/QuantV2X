@@ -64,6 +64,18 @@ class Adaptor:
             return cav_list
 
         assignment = self.modality_assignment[scenario_name]
+        # ============================================================
+        # Only the agents on disk: the assignment lists four agents for
+        # every scene, some V2X-Real scenes have three. When every agent
+        # maps to the ego modality (homogeneous LiDAR), keep the order of
+        # the dataset mode (vc: a vehicle is ego), otherwise the first
+        # assigned agent, possibly the infrastructure, would become ego.
+        # ============================================================
+        assignment = OrderedDict((cav_id, m) for cav_id, m in assignment.items()
+                                 if cav_id in cav_list)
+        if all(self.mapping_dict[assignment[cav_id]] in self.ego_modality
+               for cav_id in cav_list):
+            return cav_list
         if assignment[cav_list[0]] not in self.ego_modality:
             ego_cav = None
             for cav_id, modality in assignment.items():
