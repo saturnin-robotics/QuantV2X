@@ -58,6 +58,13 @@ class PointPillarCoopFGNN(nn.Module):
         self.reg_head = nn.Conv2d(channels, 7 * anchors, kernel_size=1)
         self.cls_head_single = nn.Conv2d(channels, anchors, kernel_size=1)
         self.reg_head_single = nn.Conv2d(channels, 7 * anchors, kernel_size=1)
+        # optional direction classifier (dir_args), on both heads
+        self.use_dir = 'dir_args' in args
+        if self.use_dir:
+            bins = args['dir_args']['num_bins']
+            self.dir_head = nn.Conv2d(channels, bins * anchors, kernel_size=1)
+            self.dir_head_single = nn.Conv2d(channels, bins * anchors,
+                                             kernel_size=1)
 
         coop = dict(args['coopfgnn'])
         self.aligned = coop.get('aligned', False)
@@ -117,26 +124,30 @@ class PointPillarCoopFGNN(nn.Module):
                           for b, n in enumerate(record_len)])
 
     @staticmethod
-    def late_fusion(psm, rm, psm_single, rm_single, record_len):
+    def late_fusion(record_len, psm, psm_single, maps):
         """
         Per anchor, keep the most confident of the fused prediction and the
         neighbours' single-agent predictions (all on the ego anchors), with
-        its regression; thresholding and NMS then run as usual.
+        its other outputs; thresholding and NMS then run as usual.
+
+        maps: list of (fused, single, k) for the outputs with k channels per
+        anchor (regression k=7, direction k=num_bins), grouped per anchor.
         """
         B, A, H, W = psm.shape
-        out_psm, out_rm = [], []
+        out_psm, out_maps = [], [[] for _ in maps]
         start = 0
         for b, n in enumerate(record_len.tolist()):
             cls = torch.cat([psm[b:b + 1], psm_single[start + 1:start + n]])
-            # regression channels are grouped per anchor: (A, 7)
-            reg = torch.cat([rm[b:b + 1], rm_single[start + 1:start + n]])
-            reg = reg.view(-1, A, 7, H, W)
             best = cls.argmax(dim=0, keepdim=True)
             out_psm.append(cls.gather(0, best)[0])
-            out_rm.append(reg.gather(
-                0, best.unsqueeze(2).expand(1, A, 7, H, W))[0].view(7 * A, H, W))
+            for out, (fused, single, k) in zip(out_maps, maps):
+                m = torch.cat([fused[b:b + 1], single[start + 1:start + n]])
+                m = m.view(-1, A, k, H, W)
+                out.append(m.gather(
+                    0, best.unsqueeze(2).expand(1, A, k, H, W))[0].view(
+                        k * A, H, W))
             start += n
-        return torch.stack(out_psm), torch.stack(out_rm)
+        return torch.stack(out_psm), [torch.stack(o) for o in out_maps]
 
     def encode(self, lidar, record_len, scales=False):
         """
@@ -217,14 +228,23 @@ class PointPillarCoopFGNN(nn.Module):
             belief = self.shrink_conv(
                 self.backbone.decode_multiscale_feature(belief))
 
-        psm, rm = self.cls_head(belief), self.reg_head(belief)
+        out = {'cls_preds': self.cls_head(belief),
+               'reg_preds': self.reg_head(belief),
+               'cls_preds_single': psm_single,
+               'reg_preds_single': rm_single}
+        heads = [('reg_preds', 7)]
+        if self.use_dir:
+            out['dir_preds'] = self.dir_head(belief)
+            out['dir_preds_single'] = self.dir_head_single(feats)
+            heads.append(('dir_preds', out['dir_preds'].shape[1] //
+                          out['cls_preds'].shape[1]))
         if self.late and not self.training:
-            psm, rm = self.late_fusion(psm, rm, psm_single, rm_single,
-                                       record_len)
+            out['cls_preds'], fused = self.late_fusion(
+                record_len, out['cls_preds'], psm_single,
+                [(out[h], out[h + '_single'], k) for h, k in heads])
+            for (h, _), m in zip(heads, fused):
+                out[h] = m
 
-        return {'cls_preds': psm,
-                'reg_preds': rm,
-                'cls_preds_single': psm_single,
-                'reg_preds_single': rm_single,
-                'comm_bits': stats['bits'],
-                'ego_alpha': stats['ego_alpha']}
+        out.update({'comm_bits': stats['bits'],
+                    'ego_alpha': stats['ego_alpha']})
+        return out
