@@ -60,6 +60,7 @@ class PointPillarCoopFGNN(nn.Module):
         self.reg_head_single = nn.Conv2d(channels, 7 * anchors, kernel_size=1)
 
         coop = dict(args['coopfgnn'])
+        self.aligned = coop.get('aligned', False)
         stride = coop.pop('feature_stride')
         r = args['lidar_range']
         grid = BEVGrid(x_range=(r[0], r[3]), y_range=(r[1], r[4]),
@@ -90,6 +91,14 @@ class PointPillarCoopFGNN(nn.Module):
         # ============================================================
         eval_args = dict(args.get('coopfgnn_eval', {}))
         eval_args.update(json.loads(os.environ.get('COOPFGNN_EVAL') or '{}'))
+        # ============================================================
+        # late: inference-time late fusion of the neighbours' single-agent
+        # predictions with the fused ones (hybrid, as CoSDH intermediatelate).
+        # Only in aligned mode, where every agent predicts on the ego anchors.
+        # ============================================================
+        self.late = eval_args.pop('late', False)
+        if self.late and not self.aligned:
+            raise ValueError('late fusion needs aligned mode (proj_first)')
         if 'noise' in eval_args:
             eval_args['noise'] = tuple(eval_args['noise'])
         self.fusion_net.set_eval(**eval_args)
@@ -106,6 +115,28 @@ class PointPillarCoopFGNN(nn.Module):
         """(N,) column of the padded (B, max_cav, 3) prior encoding."""
         return torch.cat([prior_encoding[b, :n, column]
                           for b, n in enumerate(record_len)])
+
+    @staticmethod
+    def late_fusion(psm, rm, psm_single, rm_single, record_len):
+        """
+        Per anchor, keep the most confident of the fused prediction and the
+        neighbours' single-agent predictions (all on the ego anchors), with
+        its regression; thresholding and NMS then run as usual.
+        """
+        B, A, H, W = psm.shape
+        out_psm, out_rm = [], []
+        start = 0
+        for b, n in enumerate(record_len.tolist()):
+            cls = torch.cat([psm[b:b + 1], psm_single[start + 1:start + n]])
+            # regression channels are grouped per anchor: (A, 7)
+            reg = torch.cat([rm[b:b + 1], rm_single[start + 1:start + n]])
+            reg = reg.view(-1, A, 7, H, W)
+            best = cls.argmax(dim=0, keepdim=True)
+            out_psm.append(cls.gather(0, best)[0])
+            out_rm.append(reg.gather(
+                0, best.unsqueeze(2).expand(1, A, 7, H, W))[0].view(7 * A, H, W))
+            start += n
+        return torch.stack(out_psm), torch.stack(out_rm)
 
     def encode(self, lidar, record_len, scales=False):
         """
@@ -186,8 +217,13 @@ class PointPillarCoopFGNN(nn.Module):
             belief = self.shrink_conv(
                 self.backbone.decode_multiscale_feature(belief))
 
-        return {'cls_preds': self.cls_head(belief),
-                'reg_preds': self.reg_head(belief),
+        psm, rm = self.cls_head(belief), self.reg_head(belief)
+        if self.late and not self.training:
+            psm, rm = self.late_fusion(psm, rm, psm_single, rm_single,
+                                       record_len)
+
+        return {'cls_preds': psm,
+                'reg_preds': rm,
                 'cls_preds_single': psm_single,
                 'reg_preds_single': rm_single,
                 'comm_bits': stats['bits'],
