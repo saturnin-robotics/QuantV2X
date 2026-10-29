@@ -75,10 +75,19 @@ class PointPillarCoopFGNN(nn.Module):
         self.shrink_conv = DownsampleConv(args['shrink_header'])
         channels = args['shrink_header']['dim'][-1]
 
-        anchors = args['anchor_number']
-        self.cls_head = nn.Conv2d(channels, anchors, kernel_size=1)
+        # ============================================================
+        # Heads in the layout of the postprocessors: one class (OPV2V) or
+        # num_class classes with their own anchors (V2X-Real, 3 heads):
+        # anchor_number * num_class anchors per cell, each with num_class
+        # scores, 7 box codes and num_bins direction logits
+        # ============================================================
+        self.num_class = args.get('num_class', 1)
+        anchors = args['anchor_number'] * self.num_class
+        self.n_anchor = anchors
+        scores = anchors * (self.num_class if self.num_class > 1 else 1)
+        self.cls_head = nn.Conv2d(channels, scores, kernel_size=1)
         self.reg_head = nn.Conv2d(channels, 7 * anchors, kernel_size=1)
-        self.cls_head_single = nn.Conv2d(channels, anchors, kernel_size=1)
+        self.cls_head_single = nn.Conv2d(channels, scores, kernel_size=1)
         self.reg_head_single = nn.Conv2d(channels, 7 * anchors, kernel_size=1)
         # optional direction classifier (dir_args), on both heads
         self.use_dir = 'dir_args' in args
@@ -172,27 +181,30 @@ class PointPillarCoopFGNN(nn.Module):
                           for b, n in enumerate(record_len)])
 
     @staticmethod
-    def late_fusion(record_len, psm, psm_single, maps, late_min=0.0):
+    def late_fusion(record_len, n_anchor, maps, late_min=0.0):
         """
         Per anchor, keep the most confident of the fused prediction and the
         neighbours' single-agent predictions (all on the ego anchors), with
         its other outputs; thresholding and NMS then run as usual.
 
         maps: list of (fused, single, k) for the outputs with k channels per
-        anchor (regression k=7, direction k=num_bins), grouped per anchor.
-        late_min: minimum confidence of a neighbour prediction.
+        anchor, grouped per anchor; the first one is the classification
+        (k = 1, or num_class scores), the most confident class of an anchor
+        ranks it. late_min: minimum confidence of a neighbour prediction.
         """
-        B, A, H, W = psm.shape
-        out_psm, out_maps = [], [[] for _ in maps]
+        H, W = maps[0][0].shape[-2:]
+        A = n_anchor
+        out_maps = [[] for _ in maps]
         start = 0
         for b, n in enumerate(record_len.tolist()):
-            nbr = psm_single[start + 1:start + n]
+            fused, single, k = maps[0]
+            cls = torch.cat([fused[b:b + 1], single[start + 1:start + n]])
+            score = cls.view(-1, A, k, H, W).max(dim=2)[0]
             if late_min > 0:
-                nbr = nbr.masked_fill(torch.sigmoid(nbr) < late_min,
-                                      float('-inf'))
-            cls = torch.cat([psm[b:b + 1], nbr])
-            best = cls.argmax(dim=0, keepdim=True)
-            out_psm.append(cls.gather(0, best)[0])
+                low = torch.sigmoid(score[1:]) < late_min
+                score = torch.cat([score[:1],
+                                   score[1:].masked_fill(low, float('-inf'))])
+            best = score.argmax(dim=0, keepdim=True)
             for out, (fused, single, k) in zip(out_maps, maps):
                 m = torch.cat([fused[b:b + 1], single[start + 1:start + n]])
                 m = m.view(-1, A, k, H, W)
@@ -200,7 +212,7 @@ class PointPillarCoopFGNN(nn.Module):
                     0, best.unsqueeze(2).expand(1, A, k, H, W))[0].view(
                         k * A, H, W))
             start += n
-        return torch.stack(out_psm), [torch.stack(o) for o in out_maps]
+        return [torch.stack(o) for o in out_maps]
 
     def encode(self, lidar, record_len, scales=False):
         """
@@ -247,17 +259,30 @@ class PointPillarCoopFGNN(nn.Module):
                 self.agent_poses(data_dict['prev_ego_pose']))
         return amb, T_t_prev
 
+    @staticmethod
+    def lidar_inputs(data_dict):
+        """
+        Pillars of every agent: processed_lidar (OpenCOOD datasets) or the
+        inputs of the single LiDAR modality of the heter datasets (V2X-Real,
+        every agent mapped to m1, so the agents keep their order).
+        """
+        if 'processed_lidar' in data_dict:
+            return data_dict['processed_lidar']
+        modalities = set(data_dict['agent_modality_list'])
+        assert len(modalities) == 1, f'one LiDAR modality expected, {modalities}'
+        return data_dict[f'inputs_{modalities.pop()}']
+
     def forward(self, data_dict):
-        voxel_features = data_dict['processed_lidar']['voxel_features']
-        voxel_coords = data_dict['processed_lidar']['voxel_coords']
-        voxel_num_points = data_dict['processed_lidar']['voxel_num_points']
+        lidar = self.lidar_inputs(data_dict)
+        voxel_features = lidar['voxel_features']
+        voxel_coords = lidar['voxel_coords']
+        voxel_num_points = lidar['voxel_num_points']
         record_len = data_dict['record_len']
 
         if self.multiscale:
-            feats, levels = self.encode(data_dict['processed_lidar'],
-                                        record_len, scales=True)
+            feats, levels = self.encode(lidar, record_len, scales=True)
         else:
-            feats = self.encode(data_dict['processed_lidar'], record_len)
+            feats = self.encode(lidar, record_len)
 
         psm_single = self.cls_head_single(feats)
         rm_single = self.reg_head_single(feats)
@@ -270,6 +295,9 @@ class PointPillarCoopFGNN(nn.Module):
             prior = data_dict['prior_encoding']
             dt = self.per_agent(prior, record_len, 1).to(feats)
             agent_type = self.per_agent(prior, record_len, 2).round().long()
+        elif 'agent_is_infra' in data_dict:
+            # AGENT_INFRA = 1, AGENT_VEHICLE = 0 (edge_encoder.py)
+            agent_type = data_dict['agent_is_infra'].long().to(feats.device)
         amb_prev, T_t_prev = self.previous_ambiguity(data_dict, record_len)
 
         pose_clean = None
@@ -291,15 +319,16 @@ class PointPillarCoopFGNN(nn.Module):
                'reg_preds': self.reg_head(belief),
                'cls_preds_single': psm_single,
                'reg_preds_single': rm_single}
-        heads = [('reg_preds', 7)]
+        A = self.n_anchor
+        heads = [('cls_preds', out['cls_preds'].shape[1] // A),
+                 ('reg_preds', 7)]
         if self.use_dir:
             out['dir_preds'] = self.dir_head(belief)
             out['dir_preds_single'] = self.dir_head_single(feats)
-            heads.append(('dir_preds', out['dir_preds'].shape[1] //
-                          out['cls_preds'].shape[1]))
+            heads.append(('dir_preds', out['dir_preds'].shape[1] // A))
         if self.late and not self.training:
-            out['cls_preds'], fused = self.late_fusion(
-                record_len, out['cls_preds'], psm_single,
+            fused = self.late_fusion(
+                record_len, A,
                 [(out[h], out[h + '_single'], k) for h, k in heads],
                 self.late_min)
             for (h, _), m in zip(heads, fused):

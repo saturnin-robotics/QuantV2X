@@ -630,6 +630,8 @@ def getIntermediateheter3classFusionDataset(cls):
 
             # pairwise transformation matrix
             pairwise_t_matrix_list = []
+            # V2X-Real: a negative agent id is an infrastructure unit
+            agent_is_infra = []
 
             # disconet
             teacher_processed_lidar_list = []
@@ -644,6 +646,8 @@ def getIntermediateheter3classFusionDataset(cls):
 
             for i in range(len(batch)):
                 ego_dict = batch[i]['ego']
+                agent_is_infra.extend([int(cav_id) < 0
+                                       for cav_id in ego_dict['cav_id_list']])
                 object_bbx_center.append(ego_dict['object_bbx_center'])
                 object_bbx_mask.append(ego_dict['object_bbx_mask'])
                 object_ids.append(ego_dict['object_ids'])
@@ -726,7 +730,8 @@ def getIntermediateheter3classFusionDataset(cls):
                                     'object_ids': object_ids[0],
                                     'pairwise_t_matrix': pairwise_t_matrix,
                                     'lidar_pose_clean': lidar_pose_clean,
-                                    'lidar_pose': lidar_pose})
+                                    'lidar_pose': lidar_pose,
+                                    'agent_is_infra': torch.tensor(agent_is_infra)})
                                     # 'anchor_box': self.anchor_box_torch})
 
 
