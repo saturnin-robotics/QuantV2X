@@ -102,8 +102,11 @@ class PointPillarCoopFGNN(nn.Module):
         # late: inference-time late fusion of the neighbours' single-agent
         # predictions with the fused ones (hybrid, as CoSDH intermediatelate).
         # Only in aligned mode, where every agent predicts on the ego anchors.
+        # late_min: a neighbour prediction is only considered above this
+        # confidence, so that the max over heads does not lift negatives.
         # ============================================================
         self.late = eval_args.pop('late', False)
+        self.late_min = eval_args.pop('late_min', 0.0)
         if self.late and not self.aligned:
             raise ValueError('late fusion needs aligned mode (proj_first)')
         if 'noise' in eval_args:
@@ -124,7 +127,7 @@ class PointPillarCoopFGNN(nn.Module):
                           for b, n in enumerate(record_len)])
 
     @staticmethod
-    def late_fusion(record_len, psm, psm_single, maps):
+    def late_fusion(record_len, psm, psm_single, maps, late_min=0.0):
         """
         Per anchor, keep the most confident of the fused prediction and the
         neighbours' single-agent predictions (all on the ego anchors), with
@@ -132,12 +135,17 @@ class PointPillarCoopFGNN(nn.Module):
 
         maps: list of (fused, single, k) for the outputs with k channels per
         anchor (regression k=7, direction k=num_bins), grouped per anchor.
+        late_min: minimum confidence of a neighbour prediction.
         """
         B, A, H, W = psm.shape
         out_psm, out_maps = [], [[] for _ in maps]
         start = 0
         for b, n in enumerate(record_len.tolist()):
-            cls = torch.cat([psm[b:b + 1], psm_single[start + 1:start + n]])
+            nbr = psm_single[start + 1:start + n]
+            if late_min > 0:
+                nbr = nbr.masked_fill(torch.sigmoid(nbr) < late_min,
+                                      float('-inf'))
+            cls = torch.cat([psm[b:b + 1], nbr])
             best = cls.argmax(dim=0, keepdim=True)
             out_psm.append(cls.gather(0, best)[0])
             for out, (fused, single, k) in zip(out_maps, maps):
@@ -241,7 +249,8 @@ class PointPillarCoopFGNN(nn.Module):
         if self.late and not self.training:
             out['cls_preds'], fused = self.late_fusion(
                 record_len, out['cls_preds'], psm_single,
-                [(out[h], out[h + '_single'], k) for h, k in heads])
+                [(out[h], out[h + '_single'], k) for h, k in heads],
+                self.late_min)
             for (h, _), m in zip(heads, fused):
                 out[h] = m
 
