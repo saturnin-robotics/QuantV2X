@@ -37,13 +37,29 @@ def inference_late_fusion(batch_data, model, dataset):
     for cav_id, cav_content in batch_data.items():
         output_dict[cav_id] = model(cav_content)
 
+    # ============================================================
+    # Bandwidth: boxes each neighbour sends (its outputs after threshold
+    # and NMS), counted before dataset.post_process alters output_dict
+    # ============================================================
+    late_boxes, late_links = 0, 0
+    for cav_id, out in output_dict.items():
+        if cav_id == 'ego':
+            continue
+        late_links += 1
+        _, score = dataset.post_processor.post_process(
+            {cav_id: batch_data[cav_id]}, OrderedDict({cav_id: dict(out)}))
+        if score is not None:
+            late_boxes += int(score.numel())
+
     pred_box_tensor, pred_score, gt_box_tensor = \
         dataset.post_process(batch_data,
                              output_dict)
 
     return_dict = {"pred_box_tensor" : pred_box_tensor, \
                     "pred_score" : pred_score, \
-                    "gt_box_tensor" : gt_box_tensor}
+                    "gt_box_tensor" : gt_box_tensor,
+                    "late_boxes" : late_boxes,
+                    "late_links" : late_links}
     return return_dict
 
 

@@ -186,6 +186,11 @@ def main():
                 infer_result = inference_utils.inference_late_fusion(batch_data,
                                                         model,
                                                         opencood_dataset)
+                # 32 bytes per box (7 values and a score in float32)
+                bw = model.__dict__.setdefault('bandwidth', {'bits': 0.0, 'links': 0})
+                bw['bits'] += infer_result['late_boxes'] * 32 * 8
+                bw['links'] += infer_result['late_links']
+                bw['box_bytes'] = bw.get('box_bytes', 0) + infer_result['late_boxes'] * 32
             elif opt.fusion_method == 'early':
                 infer_result = inference_utils.inference_early_fusion(batch_data,
                                                         model,
