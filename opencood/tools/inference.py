@@ -3,6 +3,7 @@
 # License: TDG-Attribution-NonCommercial-NoDistrib
 
 import argparse
+import collections
 import os
 import random
 import time
@@ -51,6 +52,33 @@ def test_parser():
     parser.add_argument('--note', default="", type=str, help="any other thing?")
     opt = parser.parse_args()
     return opt
+
+
+def count_late_boxes(model, batch_data, dataset):
+    """
+    Late fusion bandwidth (CoopFGNN late): each neighbour sends its own
+    detections, i.e. its single-agent predictions after the usual threshold
+    and NMS, with a score of at least late_min: 7 box values and a score in
+    float32, 32 bytes per box. Added to model.bandwidth.
+    """
+    single = getattr(model, 'last_single', None)
+    if not getattr(model, 'late', False) or single is None:
+        return
+    record_len = single['record_len'].tolist()
+    start = 0
+    boxes = 0
+    for n in record_len:
+        for k in range(start + 1, start + n):
+            out = collections.OrderedDict(
+                ego={h: single[h][k:k + 1] for h in single if h != 'record_len'})
+            _, score = dataset.post_processor.post_process(batch_data, out)
+            if score is not None:
+                boxes += int((score >= getattr(model, 'late_min', 0.0)).sum())
+        start += n
+    bw = model.__dict__.setdefault('bandwidth', {'bits': 0.0, 'links': 0})
+    bw['bits'] += boxes * 32 * 8
+    bw['box_bytes'] = bw.get('box_bytes', 0) + boxes * 32
+    model.last_single = None
 
 
 def main():
@@ -166,6 +194,7 @@ def main():
                 infer_result = inference_utils.inference_intermediate_fusion(batch_data,
                                                                 model,
                                                                 opencood_dataset)
+                count_late_boxes(model, batch_data, opencood_dataset)
             elif opt.fusion_method == 'no':
                 infer_result = inference_utils.inference_no_fusion(batch_data,
                                                                 model,
@@ -281,6 +310,9 @@ def main():
         dump = {'bytes_per_link': float(per_link),
                 'log2_bytes_per_link': float(np.log2(max(per_link, 1.0))),
                 'links': int(bw['links'])}
+        if 'box_bytes' in bw:
+            # part of bytes_per_link carried by the late-fusion boxes
+            dump['box_bytes_per_link'] = float(bw['box_bytes'] / bw['links'])
         yaml_utils.save_yaml(dump, os.path.join(opt.model_dir,
                                                 f'bandwidth_{infer_info}.yaml'))
         print(infer_info, 'bandwidth', dump)

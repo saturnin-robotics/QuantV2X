@@ -327,6 +327,11 @@ class PointPillarCoopFGNN(nn.Module):
             out['dir_preds_single'] = self.dir_head_single(feats)
             heads.append(('dir_preds', out['dir_preds'].shape[1] // A))
         if self.late and not self.training:
+            # single-agent outputs of the frame, for the box accounting of
+            # inference.py (the boxes each neighbour sends)
+            self.last_single = {h: out[h + '_single'].detach()
+                                for h, _ in heads}
+            self.last_single['record_len'] = record_len
             fused = self.late_fusion(
                 record_len, A,
                 [(out[h], out[h + '_single'], k) for h, k in heads],
