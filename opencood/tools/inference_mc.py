@@ -217,7 +217,9 @@ def main():
     _, model = train_utils.load_saved_model(saved_path, model)
     model.eval()
 
-    print(model.get_memory_footprint())
+    # only the QuantV2X heter models report their memory footprint
+    if hasattr(model, 'get_memory_footprint'):
+        print(model.get_memory_footprint())
 
     feat_cache = None
     feat_handle = None
