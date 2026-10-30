@@ -336,6 +336,11 @@ class PointPillarCoopFGNN(nn.Module):
 
         out.update({'comm_bits': stats['bits'],
                     'ego_alpha': stats['ego_alpha']})
+        if not self.training:
+            # bits sent per link, read back by inference.py
+            bw = self.__dict__.setdefault('bandwidth', {'bits': 0.0, 'links': 0})
+            bw['bits'] += float(stats['bits'].sum())
+            bw['links'] += int(stats['bits'].numel())
         if 'pose_loss' in stats and self.training:
             out['pose_loss'] = self.pose_loss_weight * stats['pose_loss']
         return out

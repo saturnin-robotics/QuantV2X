@@ -2,6 +2,9 @@
 Implementation of Where2comm fusion.
 """
 
+import math
+import os
+
 import numpy as np
 import random
 import torch
@@ -16,6 +19,9 @@ class Communication(nn.Module):
         super(Communication, self).__init__()
         # Threshold of objectiveness
         self.threshold = args['threshold']
+        # Evaluation sweep of the selection threshold without new configs
+        if os.environ.get('WHERE2COMM_THRESHOLD'):
+            self.threshold = float(os.environ['WHERE2COMM_THRESHOLD'])
         if 'gaussian_smooth' in args:
             # Gaussian Smooth
             self.smooth = True
@@ -119,6 +125,23 @@ class Where2comm(nn.Module):
 
         self.naive_communication = Communication(args['communication'])
 
+    def count_bits(self, masks, x, record_len):
+        """
+        Evaluation bandwidth: cells the non-ego agents send to the ego, each
+        C float32 values plus its index on the h x w map, accumulated in
+        self.bandwidth (bits, links).
+        """
+        if self.training:
+            return
+        _, C, h, w = x.shape
+        ego = torch.cumsum(record_len, 0) - record_len
+        sent = (masks > 0).float().sum(dim=(1, 2, 3))
+        sent[ego.long()] = 0.0
+        cell_bits = C * 32 + math.ceil(math.log2(h * w))
+        bw = self.__dict__.setdefault('bandwidth', {'bits': 0.0, 'links': 0})
+        bw['bits'] += float(sent.sum()) * cell_bits
+        bw['links'] += int((record_len - 1).sum())
+
     def regroup(self, x, record_len):
         cum_sum_len = torch.cumsum(record_len, dim=0)
         split_x = torch.tensor_split(x, cum_sum_len[:-1].cpu())
@@ -158,6 +181,7 @@ class Where2comm(nn.Module):
                             communication_masks = F.interpolate(communication_masks, size=(x.shape[-2], x.shape[-1]),
                                                                 mode='bilinear', align_corners=False)
                         x = x * communication_masks
+                        self.count_bits(communication_masks, x, record_len)
 
                 # 2. Split the features
                 # split_x: [(L1, C, H, W), (L2, C, H, W), ...]
@@ -193,6 +217,7 @@ class Where2comm(nn.Module):
                 batch_confidence_maps = self.regroup(psm_single, record_len)
                 communication_masks, communication_rates = self.naive_communication(batch_confidence_maps, B)
                 x = x * communication_masks
+                self.count_bits(communication_masks, x, record_len)
 
             # 2. Split the features
             # split_x: [(L1, C, H, W), (L2, C, H, W), ...]

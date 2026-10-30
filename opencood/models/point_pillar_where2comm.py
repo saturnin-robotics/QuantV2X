@@ -117,4 +117,7 @@ class PointPillarWhere2comm(nn.Module):
         rm = self.reg_head(fused_feature)
 
         output_dict = {'psm': psm, 'rm': rm, 'com': communication_rates}
+        # bits sent per link, read back by inference.py
+        if hasattr(self.fusion_net, 'bandwidth'):
+            self.bandwidth = self.fusion_net.bandwidth
         return output_dict
