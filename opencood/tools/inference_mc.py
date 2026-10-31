@@ -4,6 +4,7 @@
 
 
 import argparse
+import collections
 import os
 import random
 import time
@@ -176,6 +177,35 @@ def _score_for_vis(pred_score):
         return torch.from_numpy(pred_np[:, 0])
     return torch.from_numpy(pred_np)
     
+
+def count_late_boxes_mc(model, batch_data, dataset):
+    """
+    Late fusion bandwidth (CoopFGNN late), multi-class post-processing:
+    each neighbour sends its single-agent detections after threshold and
+    NMS with a score of at least late_min, 32 bytes per box (7 values and a
+    score in float32; the class fits in the spare bits). Added to
+    model.bandwidth as in inference.count_late_boxes.
+    """
+    single = getattr(model, 'last_single', None)
+    if not getattr(model, 'late', False) or single is None:
+        return
+    record_len = single['record_len'].tolist()
+    start = 0
+    boxes = 0
+    for n in record_len:
+        for k in range(start + 1, start + n):
+            out = collections.OrderedDict(
+                ego={h: single[h][k:k + 1] for h in single if h != 'record_len'})
+            _, score_labels = dataset.post_processor.post_process(batch_data, out)
+            if score_labels is not None:
+                boxes += int((score_labels[:, 0] >=
+                              getattr(model, 'late_min', 0.0)).sum())
+        start += n
+    bw = model.__dict__.setdefault('bandwidth', {'bits': 0.0, 'links': 0})
+    bw['bits'] += boxes * 32 * 8
+    bw['box_bytes'] = bw.get('box_bytes', 0) + boxes * 32
+    model.last_single = None
+
 
 def main():
     opt = test_parser()
@@ -358,6 +388,7 @@ def main():
                             inference_utils_mc.inference_intermediate_fusion(batch_data,
                                                                         model,
                                                                         opencood_dataset)
+                    count_late_boxes_mc(model, batch_data, opencood_dataset)
                 else:
                     raise NotImplementedError('Only early, late and intermediate'
                                             'fusion is supported.')
@@ -501,6 +532,22 @@ def main():
     
     eval_utils_mc.eval_final_results(result_stat,
                                   opt.model_dir)
+
+    # ============================================================
+    # Bandwidth, as in inference.py: models that count what they transmit
+    # (CoopFGNN) keep the bits sent per link in model.bandwidth
+    # ============================================================
+    bw = getattr(model, 'bandwidth', None)
+    if bw is not None and bw['links'] > 0:
+        per_link = bw['bits'] / bw['links'] / 8.0
+        dump = {'bytes_per_link': float(per_link),
+                'log2_bytes_per_link': float(np.log2(max(per_link, 1.0))),
+                'links': int(bw['links'])}
+        if 'box_bytes' in bw:
+            dump['box_bytes_per_link'] = float(bw['box_bytes'] / bw['links'])
+        yaml_utils.save_yaml(dump, os.path.join(
+            opt.model_dir, f'bandwidth_{opt.fusion_method}.yaml'))
+        print('bandwidth', dump)
     if opt.show_sequence:
         vis.destroy_window()
 
