@@ -531,6 +531,14 @@ def getLateheter3classFusionDataset(cls):
                                             'transformation_matrix': transformation_matrix_torch,
                                             'transformation_matrix_clean': transformation_matrix_clean_torch,
                                             'modality_name': modality_name})
+                # Inputs of the heter intermediate models run on this agent
+                # alone (late fusion of a model trained on the intermediate
+                # dataset): one agent, identity pairwise transforms
+                output_dict[cav_id].update({
+                    'agent_modality_list': [modality_name],
+                    'record_len': torch.tensor([1], dtype=torch.int),
+                    'pairwise_t_matrix': torch.eye(4).repeat(
+                        1, self.max_cav, self.max_cav, 1, 1)})
 
                 if self.visualize:
                     origin_lidar = \
