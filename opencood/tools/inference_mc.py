@@ -207,6 +207,27 @@ def count_late_boxes_mc(model, batch_data, dataset):
     model.last_single = None
 
 
+def count_late_fusion_boxes(model, batch_data, output_dict, dataset):
+    """
+    Bandwidth of plain late fusion: every non-ego agent sends its own
+    detections after the score threshold and NMS, 32 bytes per box (7
+    values and a score in float32). One link per non-ego agent.
+    """
+    boxes, links = 0, 0
+    for cav_id in output_dict:
+        if cav_id == 'ego':
+            continue
+        links += 1
+        pred, _ = dataset.post_processor.post_process(
+            {cav_id: batch_data[cav_id]}, {cav_id: output_dict[cav_id]})
+        if pred is not None:
+            boxes += int(pred.shape[0])
+    bw = model.__dict__.setdefault('bandwidth', {'bits': 0.0, 'links': 0})
+    bw['bits'] += boxes * 32 * 8
+    bw['links'] += links
+    bw['box_bytes'] = bw.get('box_bytes', 0) + boxes * 32
+
+
 def main():
     opt = test_parser()
     assert opt.fusion_method in ['late', 'early', 'intermediate', "nofusion"]
@@ -222,6 +243,12 @@ def main():
     print(hypes['dataset_mode'])
 
     hypes['validate_dir'] = hypes['test_dir'] # change the validate_dir to test_dir for inference
+    # Late fusion of a model trained with the intermediate dataset: the late
+    # dataset of the same family gives each agent its own sample
+    if opt.fusion_method == 'late' and \
+            hypes['fusion']['core_method'].startswith('intermediate'):
+        hypes['fusion']['core_method'] = \
+            hypes['fusion']['core_method'].replace('intermediate', 'late', 1)
 
     print('Dataset Building')
     opencood_dataset = build_dataset(hypes, visualize=True, train=False, calibrate=False)
@@ -348,10 +375,13 @@ def main():
                                                                 opencood_dataset,
                                                                 return_output=True)
                     else:
-                        pred_box_tensor, pred_score, gt_box_tensor, gt_label_tensor = \
+                        output_dict, pred_box_tensor, pred_score, gt_box_tensor, gt_label_tensor = \
                             inference_utils_mc.inference_late_fusion(batch_data,
                                                                 model,
-                                                                opencood_dataset)
+                                                                opencood_dataset,
+                                                                return_output=True)
+                    count_late_fusion_boxes(model, batch_data, output_dict,
+                                            opencood_dataset)
                 elif opt.fusion_method == 'nofusion':
                     if opt.debug_pred:
                         output_dict, pred_box_tensor, pred_score, gt_box_tensor, gt_label_tensor = \
