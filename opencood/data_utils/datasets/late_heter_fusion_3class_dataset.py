@@ -412,6 +412,16 @@ def getLateheter3classFusionDataset(cls):
                     merged_image_inputs_dict = merge_features_to_dict(eval(f"inputs_list_{modality_name}"), merge='stack')
                     output_dict['ego'].update({f'inputs_{modality_name}': merged_image_inputs_dict})
 
+            # Single-agent training of a heter intermediate model: every
+            # sample is one agent, identity pairwise transforms
+            B = len(batch)
+            output_dict['ego'].update({
+                'agent_modality_list': [batch[i]['ego']['modality_name']
+                                        for i in range(B)],
+                'record_len': torch.ones(B, dtype=torch.int),
+                'pairwise_t_matrix': torch.eye(4).repeat(
+                    B, self.max_cav, self.max_cav, 1, 1)})
+
             return output_dict
 
         def collate_batch_test(self, batch):
