@@ -156,6 +156,12 @@ class PointPillarCoopFGNN(nn.Module):
         # ============================================================
         self.late = eval_args.pop('late', False)
         self.late_min = eval_args.pop('late_min', 0.0)
+        # late_floor: query-guided late fusion. A neighbour sends a box only
+        # if its score * max(M_hat, late_floor) reaches late_min, the rule
+        # of the feature selection applied to its boxes: boxes where the ego
+        # is blind pass at late_min, boxes the ego already sees need
+        # late_min / late_floor. None = every box above late_min is sent.
+        self.late_floor = eval_args.pop('late_floor', None)
         if self.late and not self.aligned:
             raise ValueError('late fusion needs aligned mode (proj_first)')
         # The noise announced at inference defaults to the one the
@@ -213,6 +219,24 @@ class PointPillarCoopFGNN(nn.Module):
                         k * A, H, W))
             start += n
         return [torch.stack(o) for o in out_maps]
+
+    def gate_by_query(self, cls_single, stats, A):
+        """
+        Query-guided late fusion: the single-agent classification logits of
+        the senders are dropped (set to -1e4) on the anchors whose most
+        confident class has score * max(M_hat, late_floor) < late_min, so
+        those boxes are neither fused nor counted as sent.
+        """
+        N, C, H, W = cls_single.shape
+        k = C // A
+        weight = cls_single.new_ones(N, 1, 1, H, W)
+        weight[stats['src']] = stats['m_hat'].to(cls_single).clamp(
+            min=self.late_floor).unsqueeze(1)
+        prob = torch.sigmoid(cls_single).view(N, A, k, H, W).max(
+            dim=2, keepdim=True)[0]
+        send = (prob * weight) >= self.late_min
+        gated = cls_single.view(N, A, k, H, W).masked_fill(~send, -1e4)
+        return gated.view(N, C, H, W)
 
     def encode(self, lidar, record_len, scales=False):
         """
@@ -326,6 +350,10 @@ class PointPillarCoopFGNN(nn.Module):
             out['dir_preds'] = self.dir_head(belief)
             out['dir_preds_single'] = self.dir_head_single(feats)
             heads.append(('dir_preds', out['dir_preds'].shape[1] // A))
+        if self.late and self.late_floor is not None and not self.training \
+                and 'src' in stats:
+            out['cls_preds_single'] = self.gate_by_query(
+                out['cls_preds_single'], stats, A)
         if self.late and not self.training:
             # single-agent outputs of the frame, for the box accounting of
             # inference.py (the boxes each neighbour sends)
