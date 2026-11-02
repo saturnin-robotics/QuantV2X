@@ -7,6 +7,7 @@
 3D Anchor Generator for Voxel
 """
 import math
+import os
 import sys
 
 import numpy as np
@@ -20,6 +21,47 @@ from opencood.data_utils.post_processor.base_postprocessor_multi_class \
 from opencood.utils import box_utils_mc
 from opencood.utils.box_overlaps import bbox_overlaps
 from opencood.visualization import vis_utils_mc
+
+
+def circle_nms(boxes, scores, labels, radii):
+    """
+    Class-wise circle NMS (as CenterPoint): a prediction is dropped when the
+    BEV center of a more confident prediction of the same class lies within
+    the radius of that class. Small objects (pedestrians) predicted twice
+    with an offset of a few decimetres barely overlap, so the rotated IoU
+    NMS keeps both.
+
+    Args:
+        boxes  : (N, 8, 3) corners
+        scores : (N,)
+        labels : (N,) classes, 1-indexed
+        radii  : {class: radius in meters}
+    Returns:
+        keep : (N,) bool
+    """
+    keep = torch.ones(len(scores), dtype=torch.bool, device=scores.device)
+    centers = boxes[:, :, :2].mean(dim=1)
+    for cls, r in radii.items():
+        idx = torch.nonzero(labels == cls).flatten()
+        if len(idx) < 2:
+            continue
+        idx = idx[torch.argsort(scores[idx], descending=True)]
+        dist = torch.cdist(centers[idx], centers[idx])
+        alive = torch.ones(len(idx), dtype=torch.bool, device=scores.device)
+        for k in range(len(idx)):
+            if alive[k]:
+                close = dist[k] < r
+                close[:k + 1] = False
+                alive &= ~close
+        keep[idx[~alive]] = False
+    return keep
+
+
+def circle_nms_radii():
+    """CIRCLE_NMS="2:0.8,3:2.0" (class:radius in meters), empty = off."""
+    spec = os.environ.get('CIRCLE_NMS', '')
+    return {int(c): float(r) for c, r in
+            (item.split(':') for item in spec.split(',') if item)}
 
 
 class VoxelPostprocessor3Heads(BasePostprocessorMultiClass):
@@ -460,6 +502,15 @@ class VoxelPostprocessor3Heads(BasePostprocessorMultiClass):
 
         # Select corresponding labels
         pred_label_tensor = pred_label_tensor[keep_index]
+
+        radii = circle_nms_radii()
+        if radii:
+            keep = circle_nms(pred_box3d_tensor, scores, pred_label_tensor,
+                              radii)
+            pred_box3d_tensor = pred_box3d_tensor[keep]
+            unprojected_box3d_tensor = unprojected_box3d_tensor[keep]
+            scores = scores[keep]
+            pred_label_tensor = pred_label_tensor[keep]
 
         # filter out the prediction out of the range.
         mask = \
