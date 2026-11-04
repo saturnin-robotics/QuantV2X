@@ -381,6 +381,15 @@ def setup_lr_schedular(hypes, optimizer, init_epoch=None, n_iter_per_epoch=None)
     """
     lr_schedule_config = hypes['lr_scheduler']
     last_epoch = init_epoch if init_epoch is not None else 0
+    # ============================================================
+    # A restored optimizer state carries the already decayed learning
+    # rate; the epoch replay below would decay it a second time (1e-5
+    # became 1e-7 after a resume at epoch 72). Restart from the base
+    # learning rate so the replay gives the scheduled value.
+    # ============================================================
+    for group in optimizer.param_groups:
+        if 'initial_lr' in group:
+            group['lr'] = group['initial_lr']
 
     if lr_schedule_config['core_method'] == 'cosineannealwarm':
         # ============================================================
